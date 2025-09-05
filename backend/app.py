@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Email Assistant FastAPI Backend - Fixed Version
-Matches the current simplified config.py
+Email Assistant FastAPI Backend - Complete Railway Production Version
+Serves both API and frontend from one Railway service
 """
 
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
+import os
 
 # Import configuration with error handling
 try:
@@ -32,7 +33,8 @@ logger = logging.getLogger(__name__)
 try:
     from fastapi import FastAPI, HTTPException, Request, Depends
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, FileResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, EmailStr
     logger.info("✅ FastAPI imports successful")
 except ImportError as e:
@@ -80,7 +82,6 @@ import re
 import json
 import sqlite3
 import hashlib
-import os
 from pathlib import Path
 
 # App lifespan management
@@ -109,6 +110,14 @@ app = FastAPI(
     redoc_url=getattr(settings, 'REDOC_URL', '/redoc'),
     lifespan=lifespan
 )
+
+# Serve static files (frontend)
+frontend_path = "../frontend"
+if os.path.exists(frontend_path):
+    app.mount("/static", StaticFiles(directory=frontend_path), name="static")
+    logger.info("✅ Frontend static files mounted at /static")
+else:
+    logger.warning("⚠️ Frontend directory not found - frontend serving disabled")
 
 # Security middleware (only if configured)
 if hasattr(settings, 'TRUSTED_HOSTS') and not getattr(settings, 'is_development', True):
@@ -337,24 +346,41 @@ def safe_rate_limit(rate: str):
         return func
     return decorator
 
-# Health check endpoints
+# Frontend serving endpoints
+@app.get("/app")
+async def serve_frontend():
+    """Serve the main frontend application"""
+    if os.path.exists("../frontend/index.html"):
+        return FileResponse("../frontend/index.html")
+    else:
+        raise HTTPException(status_code=404, detail="Frontend not found")
+
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Main landing page with navigation links"""
     return {
         "status": "healthy",
-        "message": f"{settings.APP_NAME} API is running",
-        "version": settings.APP_VERSION,
+        "message": f"{settings.APP_NAME} v{settings.APP_VERSION}",
+        "description": "AI-powered email processing and management system",
         "environment": getattr(settings, 'ENVIRONMENT', 'development'),
-        "endpoints": {
+        "links": {
+            "frontend": "/app",
+            "api_health": "/health",
+            "api_docs": "/docs" if getattr(settings, 'ENABLE_DOCS', True) else None,
             "dashboard": "/api/dashboard",
-            "emails": "/api/emails",
-            "accounts": "/api/accounts",
-            "health": "/health",
-            "docs": "/docs" if getattr(settings, 'ENABLE_DOCS', True) else None
-        }
+            "accounts": "/api/accounts"
+        },
+        "features": [
+            "Smart email categorization",
+            "Action item extraction", 
+            "Deadline detection",
+            "Sentiment analysis",
+            "Response suggestions",
+            "Analytics dashboard"
+        ]
     }
 
+# Health check endpoints
 @app.get("/health")
 async def health_check():
     """Detailed health check"""
@@ -373,7 +399,14 @@ async def health_check():
         "database": db_status,
         "timestamp": datetime.now().isoformat(),
         "version": settings.APP_VERSION,
-        "environment": getattr(settings, 'ENVIRONMENT', 'development')
+        "environment": getattr(settings, 'ENVIRONMENT', 'development'),
+        "uptime": "running",
+        "services": {
+            "database": db_status,
+            "rate_limiting": "enabled" if RATE_LIMITING_ENABLED else "disabled",
+            "error_tracking": "enabled" if hasattr(settings, 'SENTRY_DSN') and settings.SENTRY_DSN else "disabled",
+            "frontend": "enabled" if os.path.exists("../frontend/index.html") else "disabled"
+        }
     }
 
 # Account management endpoints
@@ -644,30 +677,20 @@ if __name__ == "__main__":
     import uvicorn
     
     # Configure uvicorn based on settings
-    port = getattr(settings, 'PORT', 8000)
+    port = int(os.getenv("PORT", getattr(settings, 'PORT', 8000)))
     host = getattr(settings, 'HOST', '0.0.0.0')
     log_level = getattr(settings, 'LOG_LEVEL', 'info').lower()
-    reload = getattr(settings, 'DEV_RELOAD', False) and getattr(settings, 'DEBUG', False)
     
     logger.info(f"Starting {settings.APP_NAME} on {host}:{port}")
     logger.info(f"Environment: {getattr(settings, 'ENVIRONMENT', 'development')}")
     logger.info(f"Debug mode: {getattr(settings, 'DEBUG', True)}")
+    logger.info(f"Frontend available at: /app")
+    logger.info(f"API documentation at: /docs")
     
-    if reload:
-        # Use import string for reload to work properly
-        uvicorn.run(
-            "app:app",  # Import string instead of app object
-            host=host, 
-            port=port,
-            log_level=log_level,
-            reload=True
-        )
-    else:
-        # Direct app object for production
-        uvicorn.run(
-            app, 
-            host=host, 
-            port=port,
-            log_level=log_level,
-            access_log=getattr(settings, 'ACCESS_LOG', True)
-        )
+    uvicorn.run(
+        app, 
+        host=host, 
+        port=port,
+        log_level=log_level,
+        access_log=getattr(settings, 'ACCESS_LOG', True)
+    )

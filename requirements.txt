@@ -1,4 +1,4 @@
-# Core FastAPI dependencies (already installed)
+# Core FastAPI dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic[email]==2.5.0
@@ -12,12 +12,12 @@ psycopg2-binary==2.9.7
 # Security and rate limiting
 slowapi==0.1.9
 
-# Security packages with extras
-"passlib[bcrypt]==1.7.4"
-"python-jose[cryptography]==3.3.0"
+# Security packages with extras (NO QUOTES!)
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
 
 # Monitoring and error tracking
-"sentry-sdk[fastapi]==1.38.0"
+sentry-sdk[fastapi]==1.38.0
 
 # SSL/encryption support
-"cryptography>=3.4.8,<45.0.0"
+cryptography>=3.4.8,<45.0.0

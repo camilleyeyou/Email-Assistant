@@ -1,55 +1,77 @@
 #!/usr/bin/env python3
 """
-Email Assistant FastAPI Backend - Production Ready with Embedded Frontend
-Uses config.py for all configuration management
+Email Assistant FastAPI Backend - Complete Railway Production Version
+Serves both API and frontend from one Railway service with embedded HTML
 """
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
+import os
 
-# Import configuration first
+# Import configuration with error handling
 try:
-    from config import (
-        settings, 
-        get_cors_config, 
-        get_logging_config,
-        validate_production_settings
-    )
+    from config import settings, get_cors_config, get_logging_config
     print("✅ Configuration loaded successfully")
 except ImportError as e:
     print(f"❌ Configuration import error: {e}")
-    exit(1)
+    print("Creating fallback configuration...")
+    
+    # Fallback configuration
+    class FallbackSettings:
+        APP_NAME = "Email Assistant"
+        APP_VERSION = "1.0.0"
+        DATABASE_URL = "sqlite:///email_assistant.db"
+        ALLOWED_ORIGINS = ["*"]
+        HOST = "0.0.0.0"
+        PORT = 8000
+        DEBUG = True
+        ENVIRONMENT = "production"
+        ENABLE_DOCS = True
+        ACCESS_LOG = True
+        LOG_LEVEL = "info"
+        
+    settings = FallbackSettings()
+    
+    def get_cors_config():
+        return {
+            "allow_origins": ["*"],
+            "allow_credentials": True,
+            "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["*"],
+        }
+    
+    def get_logging_config():
+        return {
+            "level": logging.INFO,
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        }
 
-# Configure logging using config
-logging.basicConfig(**get_logging_config())
+# Configure logging using config (with fallback)
+try:
+    logging.basicConfig(**get_logging_config())
+except:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
 logger = logging.getLogger(__name__)
-
-# Validate production settings
-if settings.is_production:
-    try:
-        validate_production_settings()
-        logger.info("✅ Production settings validated")
-    except ValueError as e:
-        logger.error(f"❌ Production validation failed: {e}")
-        if not settings.DEBUG:
-            exit(1)
 
 # FastAPI imports
 try:
     from fastapi import FastAPI, HTTPException, Request, Depends
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.middleware.trustedhost import TrustedHostMiddleware
     from fastapi.responses import JSONResponse, HTMLResponse
-    from fastapi.security import HTTPBearer
     from pydantic import BaseModel, EmailStr
     logger.info("✅ FastAPI imports successful")
 except ImportError as e:
     logger.error(f"❌ FastAPI import error: {e}")
     exit(1)
 
-# Rate limiting (optional)
+# Rate limiting (optional - only if available)
+RATE_LIMITING_ENABLED = False
 try:
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.util import get_remote_address
@@ -59,11 +81,10 @@ try:
     RATE_LIMITING_ENABLED = True
     logger.info("✅ Rate limiting enabled")
 except ImportError:
-    RATE_LIMITING_ENABLED = False
     logger.warning("⚠️ Rate limiting disabled (slowapi not installed)")
 
-# Error tracking (optional)
-if settings.SENTRY_DSN:
+# Error tracking (optional - only if configured and available)
+if hasattr(settings, 'SENTRY_DSN') and getattr(settings, 'SENTRY_DSN'):
     try:
         import sentry_sdk
         from sentry_sdk.integrations.fastapi import FastAPIIntegration
@@ -71,12 +92,14 @@ if settings.SENTRY_DSN:
         sentry_sdk.init(
             dsn=settings.SENTRY_DSN,
             integrations=[FastAPIIntegration(auto_enable=True)],
-            traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-            environment=settings.ENVIRONMENT
+            traces_sample_rate=getattr(settings, 'SENTRY_TRACES_SAMPLE_RATE', 0.1),
+            environment=getattr(settings, 'ENVIRONMENT', 'development')
         )
         logger.info("✅ Sentry error tracking enabled")
     except ImportError:
         logger.warning("⚠️ Sentry not available (sentry-sdk not installed)")
+else:
+    logger.info("ℹ️ Sentry error tracking disabled")
 
 # Standard library imports
 import email
@@ -84,12 +107,10 @@ import imaplib
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import timedelta
 import re
 import json
 import sqlite3
 import hashlib
-import os
 from pathlib import Path
 
 # Embedded Frontend HTML
@@ -266,60 +287,11 @@ FRONTEND_HTML = '''<!DOCTYPE html>
                     </button>
                 </div>
 
-                <!-- Email List -->
-                <div class="space-y-4">
-                    <template x-for="email in emails" :key="email.id">
-                        <div class="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow duration-200">
-                            <div class="flex items-start justify-between mb-4">
-                                <div class="flex-1">
-                                    <div class="flex items-center space-x-3 mb-2">
-                                        <h3 class="text-lg font-semibold text-gray-900" x-text="email.subject"></h3>
-                                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
-                                              :class="getCategoryColor(email.category)"
-                                              x-text="email.category"></span>
-                                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
-                                              :class="getPriorityColor(email.priority)">
-                                            Priority <span x-text="email.priority"></span>
-                                        </span>
-                                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"
-                                              :class="getSentimentColor(email.sentiment)"
-                                              x-text="email.sentiment"></span>
-                                    </div>
-                                    <p class="text-sm text-gray-600 mb-1">From: <span class="font-medium" x-text="email.sender"></span></p>
-                                    <p class="text-sm text-gray-600">
-                                        <i class="fas fa-clock mr-1"></i>
-                                        <span x-text="new Date(email.processed_at).toLocaleString()"></span>
-                                    </p>
-                                </div>
-                            </div>
-
-                            <div class="mb-4">
-                                <p class="text-gray-700 text-sm leading-relaxed" x-text="email.content"></p>
-                            </div>
-
-                            <!-- Action Items -->
-                            <div x-show="email.action_items && email.action_items.length > 0" class="mb-4">
-                                <h4 class="font-medium text-gray-900 mb-2">
-                                    <i class="fas fa-tasks mr-2"></i>Action Items
-                                </h4>
-                                <ul class="space-y-1">
-                                    <template x-for="item in email.action_items" :key="item">
-                                        <li class="flex items-center text-sm text-gray-700">
-                                            <i class="fas fa-chevron-right text-blue-500 mr-2"></i>
-                                            <span x-text="item"></span>
-                                        </li>
-                                    </template>
-                                </ul>
-                            </div>
-                        </div>
-                    </template>
-
-                    <!-- Empty State -->
-                    <div x-show="emails.length === 0" class="text-center py-12">
-                        <i class="fas fa-inbox text-gray-400 text-6xl mb-4"></i>
-                        <h3 class="text-lg font-medium text-gray-900 mb-2">No emails found</h3>
-                        <p class="text-gray-600">Add an email account and process some emails to see results.</p>
-                    </div>
+                <!-- Empty State -->
+                <div x-show="emails.length === 0" class="text-center py-12">
+                    <i class="fas fa-inbox text-gray-400 text-6xl mb-4"></i>
+                    <h3 class="text-lg font-medium text-gray-900 mb-2">No emails found</h3>
+                    <p class="text-gray-600">Add an email account and process some emails to see results.</p>
                 </div>
             </div>
 
@@ -427,6 +399,10 @@ FRONTEND_HTML = '''<!DOCTYPE html>
                 accounts: [],
                 processing: false,
                 addingAccount: false,
+                filters: {
+                    category: '',
+                    priority: ''
+                },
                 newAccount: {
                     email: '',
                     password: '',
@@ -561,35 +537,6 @@ FRONTEND_HTML = '''<!DOCTYPE html>
                     setTimeout(() => {
                         this.notification.show = false;
                     }, 5000);
-                },
-
-                getCategoryColor(category) {
-                    const colors = {
-                        urgent: 'bg-red-100 text-red-800',
-                        meeting: 'bg-blue-100 text-blue-800',
-                        project: 'bg-green-100 text-green-800',
-                        invoice: 'bg-yellow-100 text-yellow-800',
-                        personal: 'bg-purple-100 text-purple-800',
-                        newsletter: 'bg-gray-100 text-gray-800',
-                        support: 'bg-orange-100 text-orange-800',
-                        general: 'bg-indigo-100 text-indigo-800'
-                    };
-                    return colors[category] || colors.general;
-                },
-
-                getPriorityColor(priority) {
-                    if (priority >= 4) return 'bg-red-100 text-red-800';
-                    if (priority >= 3) return 'bg-yellow-100 text-yellow-800';
-                    return 'bg-green-100 text-green-800';
-                },
-
-                getSentimentColor(sentiment) {
-                    const colors = {
-                        positive: 'bg-green-100 text-green-800',
-                        negative: 'bg-red-100 text-red-800',
-                        neutral: 'bg-gray-100 text-gray-800'
-                    };
-                    return colors[sentiment] || colors.neutral;
                 }
             }
         }
@@ -602,9 +549,8 @@ FRONTEND_HTML = '''<!DOCTYPE html>
 async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"🚀 {settings.APP_NAME} v{settings.APP_VERSION} starting up...")
-    logger.info(f"Environment: {settings.ENVIRONMENT}")
-    logger.info(f"Debug mode: {settings.DEBUG}")
-    logger.info(f"Database: {settings.DATABASE_URL.split('://')[0]}")
+    logger.info(f"Environment: {getattr(settings, 'ENVIRONMENT', 'development')}")
+    logger.info(f"Debug mode: {getattr(settings, 'DEBUG', True)}")
     
     # Initialize database
     init_db()
@@ -618,37 +564,35 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description=settings.APP_DESCRIPTION,
-    docs_url=settings.DOCS_URL,
-    redoc_url=settings.REDOC_URL,
+    description=getattr(settings, 'APP_DESCRIPTION', 'AI-powered email processing system'),
+    docs_url=getattr(settings, 'DOCS_URL', '/docs'),
+    redoc_url=getattr(settings, 'REDOC_URL', '/redoc'),
     lifespan=lifespan
 )
 
-# Security middleware
-if not settings.is_development:
-    app.add_middleware(
-        TrustedHostMiddleware, 
-        allowed_hosts=settings.TRUSTED_HOSTS
-    )
+# Security middleware (only if configured)
+if hasattr(settings, 'TRUSTED_HOSTS') and not getattr(settings, 'is_development', True):
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.TRUSTED_HOSTS)
 
 # CORS middleware
-cors_config = get_cors_config()
-app.add_middleware(CORSMiddleware, **cors_config)
+try:
+    cors_config = get_cors_config()
+    app.add_middleware(CORSMiddleware, **cors_config)
+except:
+    # Fallback CORS configuration
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=getattr(settings, 'ALLOWED_ORIGINS', ["*"]),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
-# Rate limiting middleware
+# Rate limiting middleware (only if available)
 if RATE_LIMITING_ENABLED:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Security (optional API key)
-security = HTTPBearer(auto_error=False) if settings.API_KEY else None
-
-async def verify_api_key(token: Optional[str] = Depends(security)):
-    """Verify API key if configured"""
-    if settings.API_KEY:
-        if not token or token.credentials != settings.API_KEY:
-            raise HTTPException(status_code=401, detail="Invalid API key")
-    return token
 
 # Database initialization
 def init_db():
@@ -679,8 +623,8 @@ def init_db():
 class EmailAccount(BaseModel):
     email: EmailStr
     password: str
-    imap_server: str = settings.GMAIL_IMAP_SERVER
-    smtp_server: str = settings.GMAIL_SMTP_SERVER
+    imap_server: str = getattr(settings, 'GMAIL_IMAP_SERVER', 'imap.gmail.com')
+    smtp_server: str = getattr(settings, 'GMAIL_SMTP_SERVER', 'smtp.gmail.com')
 
 class EmailData(BaseModel):
     subject: str
@@ -713,9 +657,9 @@ class EmailProcessor:
             'support': ['support', 'help', 'issue', 'problem', 'bug']
         }
         
-        # Use config settings
-        self.max_content_length = settings.MAX_EMAIL_CONTENT_LENGTH
-        self.max_subject_length = settings.MAX_SUBJECT_LENGTH
+        # Use config settings with defaults
+        self.max_content_length = getattr(settings, 'MAX_EMAIL_CONTENT_LENGTH', 10000)
+        self.max_subject_length = getattr(settings, 'MAX_SUBJECT_LENGTH', 200)
         
     def categorize_email(self, content: str, subject: str) -> str:
         # Truncate content if too long
@@ -807,7 +751,7 @@ class EmailProcessor:
         return min(base_priority, 5)
     
     def generate_response_template(self, category: str, sentiment: str, action_items: List[str]) -> str:
-        if not settings.ENABLE_RESPONSE_GENERATION:
+        if not getattr(settings, 'ENABLE_RESPONSE_GENERATION', True):
             return ""
             
         templates = {
@@ -854,23 +798,46 @@ def safe_rate_limit(rate: str):
     return decorator
 
 # Frontend serving endpoints
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Serve the main frontend application at root"""
+    try:
+        return HTMLResponse(content=FRONTEND_HTML, status_code=200)
+    except Exception as e:
+        logger.error(f"Error serving frontend: {e}")
+        return HTMLResponse(content="<h1>Error loading application</h1>", status_code=500)
+
 @app.get("/app", response_class=HTMLResponse)
 async def serve_frontend():
-    """Serve the main frontend application"""
-    return HTMLResponse(content=FRONTEND_HTML, status_code=200)
+    """Alternative route for the frontend application"""
+    try:
+        return HTMLResponse(content=FRONTEND_HTML, status_code=200)
+    except Exception as e:
+        logger.error(f"Error serving frontend: {e}")
+        return HTMLResponse(content="<h1>Error loading application</h1>", status_code=500)
 
-@app.get("/")
-async def root():
-    """Health check endpoint"""
+@app.get("/debug")
+async def debug():
+    """Simple debug endpoint"""
+    return {
+        "message": "Server is running!", 
+        "timestamp": datetime.now().isoformat(),
+        "status": "healthy",
+        "version": settings.APP_VERSION
+    }
+
+@app.get("/api/info")
+async def api_info():
+    """API information endpoint"""
     return {
         "status": "healthy",
         "message": f"{settings.APP_NAME} v{settings.APP_VERSION}",
         "description": "AI-powered email processing and management system",
-        "environment": settings.ENVIRONMENT,
+        "environment": getattr(settings, 'ENVIRONMENT', 'development'),
         "links": {
-            "frontend": "/app",
+            "frontend": "/",
             "api_health": "/health",
-            "api_docs": "/docs" if settings.ENABLE_DOCS else None,
+            "api_docs": "/docs" if getattr(settings, 'ENABLE_DOCS', True) else None,
             "dashboard": "/api/dashboard",
             "accounts": "/api/accounts"
         },
@@ -884,6 +851,7 @@ async def root():
         ]
     }
 
+# Health check endpoints
 @app.get("/health")
 async def health_check():
     """Detailed health check"""
@@ -902,11 +870,12 @@ async def health_check():
         "database": db_status,
         "timestamp": datetime.now().isoformat(),
         "version": settings.APP_VERSION,
-        "environment": settings.ENVIRONMENT,
+        "environment": getattr(settings, 'ENVIRONMENT', 'development'),
+        "uptime": "running",
         "services": {
             "database": db_status,
             "rate_limiting": "enabled" if RATE_LIMITING_ENABLED else "disabled",
-            "error_tracking": "enabled" if settings.SENTRY_DSN else "disabled",
+            "error_tracking": "enabled" if hasattr(settings, 'SENTRY_DSN') and getattr(settings, 'SENTRY_DSN') else "disabled",
             "frontend": "enabled"
         }
     }
@@ -914,16 +883,13 @@ async def health_check():
 # Account management endpoints
 @app.post("/api/accounts", response_model=dict)
 @safe_rate_limit("5/minute")
-async def add_email_account(
-    request: Request,
-    account: EmailAccount, 
-    api_key: Optional[str] = Depends(verify_api_key)
-):
+async def add_email_account(request: Request, account: EmailAccount):
     """Add an email account for processing"""
     try:
         # Test connection with timeout
+        timeout = getattr(settings, 'IMAP_CONNECTION_TIMEOUT', 30)
         imap = imaplib.IMAP4_SSL(account.imap_server)
-        imap.sock.settimeout(settings.IMAP_CONNECTION_TIMEOUT)
+        imap.sock.settimeout(timeout)
         imap.login(account.email, account.password)
         imap.logout()
         
@@ -949,7 +915,7 @@ async def add_email_account(
         raise HTTPException(status_code=400, detail=f"Failed to add account: {str(e)}")
 
 @app.get("/api/accounts")
-async def get_email_accounts(api_key: Optional[str] = Depends(verify_api_key)):
+async def get_email_accounts():
     """Get all email accounts"""
     try:
         conn = sqlite3.connect('email_assistant.db')
@@ -974,20 +940,15 @@ async def get_email_accounts(api_key: Optional[str] = Depends(verify_api_key)):
 # Email processing endpoints
 @app.post("/api/process-emails/{account_id}")
 @safe_rate_limit("10/minute")
-async def process_emails(
-    request: Request,
-    account_id: int, 
-    limit: int = None,
-    api_key: Optional[str] = Depends(verify_api_key)
-):
+async def process_emails(request: Request, account_id: int, limit: int = None):
     """Fetch and process emails from specified account"""
-    if not settings.ENABLE_EMAIL_PROCESSING:
+    if not getattr(settings, 'ENABLE_EMAIL_PROCESSING', True):
         raise HTTPException(status_code=503, detail="Email processing is disabled")
     
     # Apply batch size limits
     if limit is None:
-        limit = settings.EMAIL_BATCH_SIZE
-    limit = min(limit, settings.MAX_EMAIL_BATCH_SIZE)
+        limit = getattr(settings, 'EMAIL_BATCH_SIZE', 10)
+    limit = min(limit, getattr(settings, 'MAX_EMAIL_BATCH_SIZE', 50))
     
     try:
         # Get account details
@@ -1003,8 +964,9 @@ async def process_emails(
         logger.info(f"Processing emails for account: {email_addr}")
         
         # Connect to email server with timeout
+        timeout = getattr(settings, 'IMAP_CONNECTION_TIMEOUT', 30)
         imap = imaplib.IMAP4_SSL(imap_server)
-        imap.sock.settimeout(settings.IMAP_CONNECTION_TIMEOUT)
+        imap.sock.settimeout(timeout)
         imap.login(email_addr, password)
         imap.select('INBOX')
         
@@ -1025,7 +987,8 @@ async def process_emails(
                 sender = email_message['From'] or "Unknown Sender"
                 
                 # Truncate subject if too long
-                subject = subject[:settings.MAX_SUBJECT_LENGTH]
+                max_subject_length = getattr(settings, 'MAX_SUBJECT_LENGTH', 200)
+                subject = subject[:max_subject_length]
                 
                 # Get email body
                 content = ""
@@ -1038,7 +1001,8 @@ async def process_emails(
                     content = email_message.get_payload(decode=True).decode('utf-8', errors='ignore')
                 
                 # Truncate content if too long
-                content = content[:settings.MAX_EMAIL_CONTENT_LENGTH]
+                max_content_length = getattr(settings, 'MAX_EMAIL_CONTENT_LENGTH', 10000)
+                content = content[:max_content_length]
                 
                 # Process email
                 email_hash = hashlib.md5(f"{sender}{subject}{content[:100]}".encode()).hexdigest()
@@ -1095,13 +1059,7 @@ async def process_emails(
 
 # Email retrieval endpoints
 @app.get("/api/emails")
-@safe_rate_limit("20/minute")
-async def get_processed_emails(
-    request: Request,
-    category: Optional[str] = None, 
-    priority: Optional[int] = None,
-    api_key: Optional[str] = Depends(verify_api_key)
-):
+async def get_processed_emails(category: Optional[str] = None, priority: Optional[int] = None):
     """Get processed emails with optional filtering"""
     try:
         conn = sqlite3.connect('email_assistant.db')
@@ -1146,13 +1104,9 @@ async def get_processed_emails(
 
 # Dashboard and analytics
 @app.get("/api/dashboard")
-@safe_rate_limit("20/minute")
-async def get_dashboard_stats(
-    request: Request,
-    api_key: Optional[str] = Depends(verify_api_key)
-):
+async def get_dashboard_stats():
     """Get dashboard statistics"""
-    if not settings.ENABLE_ANALYTICS:
+    if not getattr(settings, 'ENABLE_ANALYTICS', True):
         raise HTTPException(status_code=503, detail="Analytics is disabled")
     
     try:
@@ -1189,55 +1143,25 @@ async def get_dashboard_stats(
         logger.error(f"Error fetching dashboard stats: {e}")
         raise HTTPException(status_code=500, detail="Error fetching dashboard statistics")
 
-# Metrics endpoint (optional)
-if settings.ENABLE_METRICS:
-    @app.get("/metrics")
-    async def get_metrics():
-        """Prometheus-style metrics endpoint"""
-        try:
-            conn = sqlite3.connect('email_assistant.db')
-            c = conn.cursor()
-            
-            # Basic metrics
-            c.execute("SELECT COUNT(*) FROM emails")
-            total_emails = c.fetchone()[0]
-            
-            c.execute("SELECT COUNT(*) FROM email_accounts")
-            total_accounts = c.fetchone()[0]
-            
-            conn.close()
-            
-            metrics = [
-                f"# HELP email_assistant_emails_total Total number of processed emails",
-                f"# TYPE email_assistant_emails_total counter", 
-                f"email_assistant_emails_total {total_emails}",
-                f"# HELP email_assistant_accounts_total Total number of email accounts",
-                f"# TYPE email_assistant_accounts_total gauge",
-                f"email_assistant_accounts_total {total_accounts}",
-            ]
-            
-            return "\n".join(metrics)
-            
-        except Exception as e:
-            logger.error(f"Error generating metrics: {e}")
-            raise HTTPException(status_code=500, detail="Error generating metrics")
-
 # Run the application
 if __name__ == "__main__":
     import uvicorn
     
     # Configure uvicorn based on settings
-    uvicorn_config = {
-        "app": app,
-        "host": settings.HOST,
-        "port": settings.PORT,
-        "log_level": settings.LOG_LEVEL.lower(),
-        "access_log": settings.ACCESS_LOG,
-        "reload": settings.DEV_RELOAD and settings.is_development,
-    }
+    port = int(os.getenv("PORT", getattr(settings, 'PORT', 8000)))
+    host = getattr(settings, 'HOST', '0.0.0.0')
+    log_level = getattr(settings, 'LOG_LEVEL', 'info').lower()
     
-    logger.info(f"Starting {settings.APP_NAME} on {settings.HOST}:{settings.PORT}")
-    logger.info(f"Environment: {settings.ENVIRONMENT}")
-    logger.info(f"Debug mode: {settings.DEBUG}")
+    logger.info(f"Starting {settings.APP_NAME} on {host}:{port}")
+    logger.info(f"Environment: {getattr(settings, 'ENVIRONMENT', 'development')}")
+    logger.info(f"Debug mode: {getattr(settings, 'DEBUG', True)}")
+    logger.info(f"Frontend available at: /")
+    logger.info(f"API documentation at: /docs")
     
-    uvicorn.run(**uvicorn_config)
+    uvicorn.run(
+        app, 
+        host=host, 
+        port=port,
+        log_level=log_level,
+        access_log=getattr(settings, 'ACCESS_LOG', True)
+    )

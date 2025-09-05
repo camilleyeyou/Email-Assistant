@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Email Assistant FastAPI Backend - Complete Railway Production Version
-Serves both API and frontend from one Railway service
+Serves both API and frontend from one Railway service with embedded HTML
 """
 
 import logging
@@ -33,8 +33,7 @@ logger = logging.getLogger(__name__)
 try:
     from fastapi import FastAPI, HTTPException, Request, Depends
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse, FileResponse
-    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import JSONResponse, HTMLResponse
     from pydantic import BaseModel, EmailStr
     logger.info("✅ FastAPI imports successful")
 except ImportError as e:
@@ -84,6 +83,437 @@ import sqlite3
 import hashlib
 from pathlib import Path
 
+# Embedded Frontend HTML
+FRONTEND_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        [x-cloak] { display: none !important; }
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .glass { backdrop-filter: blur(16px); background: rgba(255, 255, 255, 0.1); }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div x-data="emailAssistant()" x-init="init()" class="min-h-screen">
+        <!-- Navigation -->
+        <nav class="gradient-bg text-white shadow-lg">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex items-center justify-between h-16">
+                    <div class="flex items-center">
+                        <i class="fas fa-envelope text-2xl mr-3"></i>
+                        <h1 class="text-xl font-bold">Email Assistant</h1>
+                    </div>
+                    <div class="flex space-x-4">
+                        <button 
+                            @click="activeTab = 'dashboard'" 
+                            :class="activeTab === 'dashboard' ? 'bg-white bg-opacity-20' : ''"
+                            class="px-4 py-2 rounded-lg transition-all duration-200 hover:bg-white hover:bg-opacity-10">
+                            <i class="fas fa-chart-pie mr-2"></i>Dashboard
+                        </button>
+                        <button 
+                            @click="activeTab = 'emails'" 
+                            :class="activeTab === 'emails' ? 'bg-white bg-opacity-20' : ''"
+                            class="px-4 py-2 rounded-lg transition-all duration-200 hover:bg-white hover:bg-opacity-10">
+                            <i class="fas fa-inbox mr-2"></i>Emails
+                        </button>
+                        <button 
+                            @click="activeTab = 'accounts'" 
+                            :class="activeTab === 'accounts' ? 'bg-white bg-opacity-20' : ''"
+                            class="px-4 py-2 rounded-lg transition-all duration-200 hover:bg-white hover:bg-opacity-10">
+                            <i class="fas fa-user-cog mr-2"></i>Accounts
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <!-- Dashboard Tab -->
+            <div x-show="activeTab === 'dashboard'" x-cloak>
+                <div class="mb-8">
+                    <h2 class="text-3xl font-bold text-gray-900 mb-2">Dashboard</h2>
+                    <p class="text-gray-600">Email processing overview and analytics</p>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-500">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Total Emails</p>
+                                <p class="text-3xl font-bold text-gray-900" x-text="stats.total_emails || 0"></p>
+                            </div>
+                            <div class="p-3 bg-blue-100 rounded-full">
+                                <i class="fas fa-envelope text-blue-500"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Recent Activity</p>
+                                <p class="text-3xl font-bold text-gray-900" x-text="stats.recent_activity || 0"></p>
+                            </div>
+                            <div class="p-3 bg-green-100 rounded-full">
+                                <i class="fas fa-clock text-green-500"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-yellow-500">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">High Priority</p>
+                                <p class="text-3xl font-bold text-gray-900" x-text="(stats.priorities && stats.priorities['5']) || 0"></p>
+                            </div>
+                            <div class="p-3 bg-yellow-100 rounded-full">
+                                <i class="fas fa-exclamation-triangle text-yellow-500"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-lg p-6 border-l-4 border-purple-500">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Categories</p>
+                                <p class="text-3xl font-bold text-gray-900" x-text="Object.keys(stats.categories || {}).length"></p>
+                            </div>
+                            <div class="p-3 bg-purple-100 rounded-full">
+                                <i class="fas fa-tags text-purple-500"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Charts Section -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Category Distribution -->
+                    <div class="bg-white rounded-xl shadow-lg p-6">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">Email Categories</h3>
+                        <div class="space-y-3">
+                            <template x-for="[category, count] in Object.entries(stats.categories || {})" :key="category">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-sm font-medium text-gray-700 capitalize" x-text="category"></span>
+                                    <div class="flex items-center space-x-2">
+                                        <div class="w-32 bg-gray-200 rounded-full h-2">
+                                            <div class="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full" 
+                                                 :style="`width: ${(count / Math.max(...Object.values(stats.categories || {}))) * 100}%`"></div>
+                                        </div>
+                                        <span class="text-sm font-bold text-gray-900" x-text="count"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Priority Distribution -->
+                    <div class="bg-white rounded-xl shadow-lg p-6">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">Priority Levels</h3>
+                        <div class="space-y-3">
+                            <template x-for="[priority, count] in Object.entries(stats.priorities || {})" :key="priority">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-sm font-medium text-gray-700">
+                                        Priority <span x-text="priority"></span>
+                                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ml-2"
+                                              :class="priority >= 4 ? 'bg-red-100 text-red-800' : priority >= 3 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'">
+                                            <span x-text="priority >= 4 ? 'High' : priority >= 3 ? 'Medium' : 'Low'"></span>
+                                        </span>
+                                    </span>
+                                    <div class="flex items-center space-x-2">
+                                        <div class="w-32 bg-gray-200 rounded-full h-2">
+                                            <div :class="priority >= 4 ? 'bg-red-500' : priority >= 3 ? 'bg-yellow-500' : 'bg-green-500'" 
+                                                 class="h-2 rounded-full" 
+                                                 :style="`width: ${(count / Math.max(...Object.values(stats.priorities || {}))) * 100}%`"></div>
+                                        </div>
+                                        <span class="text-sm font-bold text-gray-900" x-text="count"></span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Emails Tab -->
+            <div x-show="activeTab === 'emails'" x-cloak>
+                <div class="flex items-center justify-between mb-8">
+                    <div>
+                        <h2 class="text-3xl font-bold text-gray-900 mb-2">Email Management</h2>
+                        <p class="text-gray-600">Process and manage your emails efficiently</p>
+                    </div>
+                    <button @click="processEmails()" 
+                            :disabled="processing"
+                            class="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-6 py-3 rounded-lg shadow-lg transition-all duration-200 disabled:opacity-50">
+                        <i class="fas fa-sync-alt mr-2" :class="{'animate-spin': processing}"></i>
+                        <span x-text="processing ? 'Processing...' : 'Process Emails'"></span>
+                    </button>
+                </div>
+
+                <!-- Empty State -->
+                <div x-show="emails.length === 0" class="text-center py-12">
+                    <i class="fas fa-inbox text-gray-400 text-6xl mb-4"></i>
+                    <h3 class="text-lg font-medium text-gray-900 mb-2">No emails found</h3>
+                    <p class="text-gray-600">Add an email account and process some emails to see results.</p>
+                </div>
+            </div>
+
+            <!-- Accounts Tab -->
+            <div x-show="activeTab === 'accounts'" x-cloak>
+                <div class="mb-8">
+                    <h2 class="text-3xl font-bold text-gray-900 mb-2">Email Accounts</h2>
+                    <p class="text-gray-600">Manage your email accounts for processing</p>
+                </div>
+
+                <!-- Add Account Form -->
+                <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-4">Add New Account</h3>
+                    <form @submit.prevent="addAccount()" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
+                                <input type="email" x-model="newAccount.email" required
+                                       class="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Password</label>
+                                <input type="password" x-model="newAccount.password" required
+                                       class="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">IMAP Server</label>
+                                <input type="text" x-model="newAccount.imap_server" placeholder="imap.gmail.com"
+                                       class="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">SMTP Server</label>
+                                <input type="text" x-model="newAccount.smtp_server" placeholder="smtp.gmail.com"
+                                       class="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            </div>
+                        </div>
+                        <button type="submit" :disabled="addingAccount"
+                                class="bg-gradient-to-r from-green-500 to-blue-600 hover:from-green-600 hover:to-blue-700 text-white px-6 py-2 rounded-lg shadow-lg transition-all duration-200 disabled:opacity-50">
+                            <i class="fas fa-plus mr-2" :class="{'animate-spin': addingAccount}"></i>
+                            <span x-text="addingAccount ? 'Adding...' : 'Add Account'"></span>
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Accounts List -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <template x-for="account in accounts" :key="account.id">
+                        <div class="bg-white rounded-xl shadow-lg p-6">
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center space-x-3">
+                                    <div class="p-3 bg-blue-100 rounded-full">
+                                        <i class="fas fa-envelope text-blue-500"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="font-semibold text-gray-900" x-text="account.email"></h3>
+                                        <p class="text-sm text-gray-600" x-text="account.imap_server"></p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                        Active
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="flex space-x-2">
+                                <button @click="processAccountEmails(account.id)" 
+                                        class="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200">
+                                    <i class="fas fa-sync-alt mr-1"></i>Process
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Empty State -->
+                    <div x-show="accounts.length === 0" class="col-span-full text-center py-12">
+                        <i class="fas fa-user-plus text-gray-400 text-6xl mb-4"></i>
+                        <h3 class="text-lg font-medium text-gray-900 mb-2">No accounts configured</h3>
+                        <p class="text-gray-600">Add an email account to start processing emails.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Notifications -->
+        <div x-show="notification.show" x-cloak 
+             class="fixed top-4 right-4 bg-white rounded-lg shadow-lg p-4 border-l-4 z-50 transition-all duration-300"
+             :class="notification.type === 'success' ? 'border-green-500' : 'border-red-500'">
+            <div class="flex items-center">
+                <i :class="notification.type === 'success' ? 'fas fa-check-circle text-green-500' : 'fas fa-exclamation-circle text-red-500'" class="mr-3"></i>
+                <p class="text-sm font-medium text-gray-900" x-text="notification.message"></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function emailAssistant() {
+            return {
+                // Configuration
+                backendUrl: window.location.origin,
+                
+                // State
+                activeTab: 'dashboard',
+                stats: {},
+                emails: [],
+                accounts: [],
+                processing: false,
+                addingAccount: false,
+                filters: {
+                    category: '',
+                    priority: ''
+                },
+                newAccount: {
+                    email: '',
+                    password: '',
+                    imap_server: 'imap.gmail.com',
+                    smtp_server: 'smtp.gmail.com'
+                },
+                notification: {
+                    show: false,
+                    message: '',
+                    type: 'success'
+                },
+
+                async init() {
+                    await this.fetchDashboardStats();
+                    await this.fetchAccounts();
+                    await this.fetchEmails();
+                },
+
+                async fetchDashboardStats() {
+                    try {
+                        const response = await fetch(`${this.backendUrl}/api/dashboard`);
+                        this.stats = await response.json();
+                    } catch (error) {
+                        console.error('Error fetching dashboard stats:', error);
+                    }
+                },
+
+                async fetchEmails() {
+                    try {
+                        const response = await fetch(`${this.backendUrl}/api/emails`);
+                        this.emails = await response.json();
+                    } catch (error) {
+                        console.error('Error fetching emails:', error);
+                    }
+                },
+
+                async fetchAccounts() {
+                    try {
+                        const response = await fetch(`${this.backendUrl}/api/accounts`);
+                        this.accounts = await response.json();
+                    } catch (error) {
+                        console.error('Error fetching accounts:', error);
+                    }
+                },
+
+                async addAccount() {
+                    this.addingAccount = true;
+                    try {
+                        const response = await fetch(`${this.backendUrl}/api/accounts`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(this.newAccount)
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (response.ok) {
+                            this.showNotification('Account added successfully!', 'success');
+                            this.newAccount = {
+                                email: '',
+                                password: '',
+                                imap_server: 'imap.gmail.com',
+                                smtp_server: 'smtp.gmail.com'
+                            };
+                            await this.fetchAccounts();
+                        } else {
+                            this.showNotification(result.detail || 'Failed to add account', 'error');
+                        }
+                    } catch (error) {
+                        this.showNotification('Error adding account', 'error');
+                    } finally {
+                        this.addingAccount = false;
+                    }
+                },
+
+                async processEmails() {
+                    if (this.accounts.length === 0) {
+                        this.showNotification('Please add an email account first', 'error');
+                        return;
+                    }
+
+                    this.processing = true;
+                    try {
+                        const accountId = this.accounts[0].id;
+                        const response = await fetch(`${this.backendUrl}/api/process-emails/${accountId}`, {
+                            method: 'POST'
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (response.ok) {
+                            this.showNotification(`Processed ${result.processed_count} emails successfully!`, 'success');
+                            await this.fetchEmails();
+                            await this.fetchDashboardStats();
+                        } else {
+                            this.showNotification(result.detail || 'Failed to process emails', 'error');
+                        }
+                    } catch (error) {
+                        this.showNotification('Error processing emails', 'error');
+                    } finally {
+                        this.processing = false;
+                    }
+                },
+
+                async processAccountEmails(accountId) {
+                    this.processing = true;
+                    try {
+                        const response = await fetch(`${this.backendUrl}/api/process-emails/${accountId}`, {
+                            method: 'POST'
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (response.ok) {
+                            this.showNotification(`Processed ${result.processed_count} emails successfully!`, 'success');
+                            await this.fetchEmails();
+                            await this.fetchDashboardStats();
+                        } else {
+                            this.showNotification(result.detail || 'Failed to process emails', 'error');
+                        }
+                    } catch (error) {
+                        this.showNotification('Error processing emails', 'error');
+                    } finally {
+                        this.processing = false;
+                    }
+                },
+
+                showNotification(message, type = 'success') {
+                    this.notification = { show: true, message, type };
+                    setTimeout(() => {
+                        this.notification.show = false;
+                    }, 5000);
+                }
+            }
+        }
+    </script>
+</body>
+</html>'''
+
 # App lifespan management
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -110,14 +540,6 @@ app = FastAPI(
     redoc_url=getattr(settings, 'REDOC_URL', '/redoc'),
     lifespan=lifespan
 )
-
-# Serve static files (frontend)
-frontend_path = "../frontend"
-if os.path.exists(frontend_path):
-    app.mount("/static", StaticFiles(directory=frontend_path), name="static")
-    logger.info("✅ Frontend static files mounted at /static")
-else:
-    logger.warning("⚠️ Frontend directory not found - frontend serving disabled")
 
 # Security middleware (only if configured)
 if hasattr(settings, 'TRUSTED_HOSTS') and not getattr(settings, 'is_development', True):
@@ -347,13 +769,10 @@ def safe_rate_limit(rate: str):
     return decorator
 
 # Frontend serving endpoints
-@app.get("/app")
+@app.get("/app", response_class=HTMLResponse)
 async def serve_frontend():
     """Serve the main frontend application"""
-    if os.path.exists("../frontend/index.html"):
-        return FileResponse("../frontend/index.html")
-    else:
-        raise HTTPException(status_code=404, detail="Frontend not found")
+    return HTMLResponse(content=FRONTEND_HTML, status_code=200)
 
 @app.get("/")
 async def root():
@@ -405,7 +824,7 @@ async def health_check():
             "database": db_status,
             "rate_limiting": "enabled" if RATE_LIMITING_ENABLED else "disabled",
             "error_tracking": "enabled" if hasattr(settings, 'SENTRY_DSN') and settings.SENTRY_DSN else "disabled",
-            "frontend": "enabled" if os.path.exists("../frontend/index.html") else "disabled"
+            "frontend": "enabled"
         }
     }
 
